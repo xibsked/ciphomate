@@ -1,29 +1,53 @@
 package config
 
 import (
+	"os"
+	"strconv"
 	"time"
-
-	"github.com/caarlos0/env/v11"
 )
 
 type Config struct {
-	Host     string `env:"HOST" envDefault:""`
-	ClientID string `env:"CLIENT_ID" envDefault:""`
-	Secret   string `env:"SECRET" envDefault:""`
-	DeviceID string `env:"DEVICE_ID" envDefault:""`
-
-	MaxRetries        int           `env:"MAX_RETRIES" envDefault:"2"`
-	RetryDelay1       time.Duration `env:"RETRY_DELAY_1" envDefault:"30m"`
-	RetryDelay2       time.Duration `env:"RETRY_DELAY_2" envDefault:"60m"`
-	CurrentThreshold  int           `env:"CURRENT_THRESHOLD" envDefault:"20"`
-	LowCurrentMinutes int           `env:"LOW_CURRENT_MINUTES" envDefault:"5"`
-	MonitorInterval   time.Duration `env:"MONITOR_INTERVAL" envDefault:"2m"`
+	Host              string
+	ClientID          string
+	Secret            string
+	DeviceID          string
+	MaxRetries        int
+	RetryDelay1       time.Duration
+	RetryDelay2       time.Duration
+	CurrentThreshold  int
+	LowCurrentMinutes int
+	MonitorInterval   time.Duration
 }
 
 func Load() (*Config, error) {
-	cfg := &Config{}
-	if err := env.Parse(cfg); err != nil {
-		return nil, err
+	return &Config{
+		Host:              os.Getenv("HOST"),
+		ClientID:          os.Getenv("CLIENT_ID"),
+		Secret:            os.Getenv("SECRET"),
+		DeviceID:          os.Getenv("DEVICE_ID"),
+		MaxRetries:        getEnvInt("MAX_RETRIES", 2),
+		RetryDelay1:       getEnvDuration("RETRY_DELAY_1", 30*time.Minute),
+		RetryDelay2:       getEnvDuration("RETRY_DELAY_2", 60*time.Minute),
+		CurrentThreshold:  getEnvInt("CURRENT_THRESHOLD", 20),
+		LowCurrentMinutes: getEnvInt("LOW_CURRENT_MINUTES", 5),
+		MonitorInterval:   getEnvDuration("MONITOR_INTERVAL", 2*time.Minute),
+	}, nil
+}
+
+func getEnvInt(key string, defaultVal int) int {
+	if valStr := os.Getenv(key); valStr != "" {
+		if val, err := strconv.Atoi(valStr); err == nil {
+			return val
+		}
 	}
-	return cfg, nil
+	return defaultVal
+}
+
+func getEnvDuration(key string, defaultVal time.Duration) time.Duration {
+	if valStr := os.Getenv(key); valStr != "" {
+		if val, err := time.ParseDuration(valStr); err == nil {
+			return val
+		}
+	}
+	return defaultVal
 }
