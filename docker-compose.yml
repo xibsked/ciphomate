@@ -1,0 +1,14 @@
+services:
+  ciphomate:
+    build: .
+    environment:
+      START_TIME: ${START_TIME}
+      STOP_TIME: ${STOP_TIME}
+      TZ: ${TZ}
+      MAX_RETRIES: ${MAX_RETRIES}
+      RETRY_DELAY_1: ${RETRY_DELAY_1}
+      RETRY_DELAY_2: ${RETRY_DELAY_2}
+      CURRENT_THRESHOLD: ${CURRENT_THRESHOLD}
+      LOW_CURRENT_MINUTES: ${LOW_CURRENT_MINUTES}
+      MONITOR_INTERVAL: ${MONITOR_INTERVAL}
+    container_name: app
