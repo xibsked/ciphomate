@@ -2,6 +2,10 @@ services:
   ciphomate:
     build: .
     environment:
+      HOST: ${HOST}
+      CLIENT_ID: ${CLIENT_ID}
+      SECRET: ${SECRET}
+      DEVICE_ID: ${DEVICE_ID}
       START_TIME: ${START_TIME}
       STOP_TIME: ${STOP_TIME}
       TZ: ${TZ}
