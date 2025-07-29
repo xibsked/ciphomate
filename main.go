@@ -10,7 +10,16 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/joho/godotenv"
 )
+
+func init() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Println("No .env file found or unable to load it — relying on OS environment")
+	}
+}
 
 func main() {
 	cfg, err := config.Load()
