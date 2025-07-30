@@ -16,10 +16,11 @@ ENV TZ=Asia/Kolkata
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /app/ciphomate /usr/local/bin/ciphomate
+COPY --from=builder /app/ciphomate /app/ciphomate
+COPY --from=builder /app/.env /app/.env
 
 # Create start/stop scripts
-RUN echo '#!/bin/bash\n/usr/local/bin/ciphomate & echo $! > /tmp/ciphomate.pid' > /app/start.sh && \
+RUN echo '#!/bin/bash\n/app/ciphomate --env /app/.env & echo $! > /tmp/ciphomate.pid' > /app/start.sh && \
     echo '#!/bin/bash\nif [ -f /tmp/ciphomate.pid ]; then kill $(cat /tmp/ciphomate.pid) && rm /tmp/ciphomate.pid; else echo "PID not found"; fi' > /app/stop.sh && \
     chmod +x /app/start.sh /app/stop.sh
 

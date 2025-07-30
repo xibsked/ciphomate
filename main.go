@@ -5,6 +5,7 @@ import (
 	"ciphomate/internal/device"
 	"ciphomate/internal/scheduler"
 	"ciphomate/internal/tuya"
+	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -14,10 +15,25 @@ import (
 	"github.com/joho/godotenv"
 )
 
+var envPath string
+
 func init() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Println("No .env file found or unable to load it — relying on OS environment")
+	flag.StringVar(&envPath, "env", "", "Optional path to .env file")
+	flag.Parse()
+	if envPath != "" {
+		err := godotenv.Load(envPath)
+		if err != nil {
+			log.Printf("⚠️ Could not load .env from '%s': %v", envPath, err)
+		} else {
+			log.Printf("✅ Loaded .env from: %s", envPath)
+		}
+	} else {
+		err := godotenv.Load()
+		if err != nil {
+			log.Println("No .env file found or unable to load it — relying on OS environment")
+		} else {
+			log.Println("Loading .env from default location")
+		}
 	}
 }
 
