@@ -3,64 +3,101 @@ package tuya
 import (
 	"ciphomate/internal/config"
 	"encoding/json"
+	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
+	"net/http"
+	"strings"
 	"time"
 )
 
-type TokenCache struct {
-	AccessToken string    `json:"access_token"`
-	ExpireTime  time.Time `json:"expire_time"`
+func NewTokenManager(cfg *config.Config, cachePath string) *TokenManager {
+	return &TokenManager{
+		Config:    cfg,
+		CachePath: cachePath,
+	}
 }
-
-var (
-	Token           string
-	tokenCachePath  = "token_cache.json"
-	tokenValidUntil time.Time
-)
-
-// InitAuth initializes and caches token
-func InitAuth(config *config.Config) {
-	Load(config)
-	if tryLoadTokenFromCache() {
+func (tm *TokenManager) GetToken() (string, error) {
+	// Try to load from cache
+	if err := tm.loadTokenFromCache(); err == nil && time.Now().Before(tm.ExpiresAt) {
 		log.Println("✅ Using cached Tuya token.")
-		return
+		return tm.Token, nil
 	}
 
 	log.Println("🔁 Fetching new Tuya token...")
-	resp, err := GetToken()
+	resp, err := fetchToken(tm.Config)
 	if err != nil {
-		log.Fatalf("Failed to fetch Tuya token: %v", err)
+		return "", err
 	}
 
-	Token = resp.AccessToken
-	tokenValidUntil = time.Now().Add(time.Duration(resp.ExpireTime) * time.Second)
+	tm.Token = resp.AccessToken
+	tm.ExpiresAt = time.Now().Add(time.Duration(resp.ExpireTime) * time.Second)
 
-	cache := TokenCache{
-		AccessToken: Token,
-		ExpireTime:  tokenValidUntil,
-	}
-	data, _ := json.Marshal(cache)
-	_ = ioutil.WriteFile(tokenCachePath, data, 0644)
+	// Save to cache
+	_ = tm.saveTokenToCache()
+
+	return tm.Token, nil
 }
 
-func tryLoadTokenFromCache() bool {
-	data, err := ioutil.ReadFile(tokenCachePath)
+func fetchToken(config *config.Config) (TokenResponse, error) {
+	clientID := config.ClientID
+	host := config.Host
+	secret := config.Secret
+
+	path := "/v1.0/token?grant_type=1"
+	t := fmt.Sprint(time.Now().UnixNano() / 1e6)
+	contentHash := Sha256([]byte(""))
+	stringToSign := fmt.Sprintf("GET\n%s\n\n%s", contentHash, path)
+	signStr := clientID + t + stringToSign
+	sign := strings.ToUpper(HmacSha256(signStr, secret))
+
+	req, _ := http.NewRequest("GET", host+path, nil)
+	req.Header.Set("client_id", clientID)
+	req.Header.Set("sign", sign)
+	req.Header.Set("t", t)
+	req.Header.Set("sign_method", "HMAC-SHA256")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return false
+		return TokenResponse{}, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	log.Println("Token API Response:", string(body))
+
+	var result struct {
+		Result TokenResponse `json:"result"`
+	}
+	err = json.Unmarshal(body, &result)
+	return result.Result, err
+}
+
+func (tm *TokenManager) loadTokenFromCache() error {
+	data, err := ioutil.ReadFile(tm.CachePath)
+	if err != nil {
+		return err
 	}
 
 	var cache TokenCache
 	if err := json.Unmarshal(data, &cache); err != nil {
-		return false
+		return err
 	}
 
-	if time.Now().After(cache.ExpireTime) {
-		log.Println("⚠️ Tuya token expired.")
-		return false
-	}
+	tm.Token = cache.AccessToken
+	tm.ExpiresAt = cache.ExpireTime
+	return nil
+}
 
-	Token = cache.AccessToken
-	tokenValidUntil = cache.ExpireTime
-	return true
+func (tm *TokenManager) saveTokenToCache() error {
+	cache := TokenCache{
+		AccessToken: tm.Token,
+		ExpireTime:  tm.ExpiresAt,
+	}
+	data, err := json.Marshal(cache)
+	if err != nil {
+		return err
+	}
+	return ioutil.WriteFile(tm.CachePath, data, 0644)
 }
