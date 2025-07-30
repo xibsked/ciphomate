@@ -8,37 +8,35 @@ import (
 	"ciphomate/internal/device"
 )
 
-var (
-	MaxRetries        = 2
-	RetryDelays       = []time.Duration{30 * time.Minute, 60 * time.Minute}
-	CurrentThreshold  = 20 // in mA
-	LowCurrentMinutes = 5  // consecutive low current minutes before shutdown
-	Interval          = 2 * time.Minute
-)
-
-func Load(cfg *config.Config) {
-	MaxRetries = cfg.MaxRetries
-	RetryDelays = []time.Duration{cfg.RetryDelay1, cfg.RetryDelay2}
-	CurrentThreshold = cfg.CurrentThreshold
-	LowCurrentMinutes = cfg.LowCurrentMinutes
-	Interval = cfg.MonitorInterval
+type Scheduler struct {
+	Config *config.Config
+	Device *device.Device
 }
 
-func MonitorUntilExpiry(expiry time.Time) {
+func NewScheduler(config *config.Config, device *device.Device) *Scheduler {
+	return &Scheduler{
+		Config: config,
+		Device: device,
+	}
+}
+
+func (s *Scheduler) MonitorUntilExpiry(expiry time.Time) {
 	// start := time.Now()
-	if runMonitorLoop(expiry) {
+	if s.runMonitorLoop(expiry) {
 		log.Println("✅ Inching completed fully. No retries needed.")
-		err := device.Switch(false)
+		err := s.Device.Switch(false)
 		if err != nil {
 			log.Printf("Error switching off %v", err)
 		}
 		return
 	}
 
-	for i := 0; i < MaxRetries && i < len(RetryDelays); i++ {
-		delay := RetryDelays[i]
+	retryDelays := []time.Duration{s.Config.RetryDelay1, s.Config.RetryDelay2}
+
+	for i := 0; i < s.Config.MaxRetries && i < len(retryDelays); i++ {
+		delay := retryDelays[i]
 		log.Printf("🔁 Retry #%d scheduled after %v.", i+1, delay)
-		if waitAndRetry(delay, expiry) {
+		if s.waitAndRetry(delay, expiry) {
 			log.Printf("✅ Retry #%d succeeded.", i+1)
 			return
 		}
@@ -46,8 +44,8 @@ func MonitorUntilExpiry(expiry time.Time) {
 	}
 }
 
-func runMonitorLoop(expiry time.Time) bool {
-	ticker := time.NewTicker(Interval)
+func (s *Scheduler) runMonitorLoop(expiry time.Time) bool {
+	ticker := time.NewTicker(s.Config.MonitorInterval)
 	defer ticker.Stop()
 
 	lowCurrentCount := 0
@@ -57,7 +55,7 @@ func runMonitorLoop(expiry time.Time) bool {
 			return true
 		}
 
-		current, err := device.GetCurrent()
+		current, err := s.Device.GetCurrent()
 		if err != nil {
 			log.Println("⚠️ Error getting current:", err)
 			continue
@@ -65,7 +63,7 @@ func runMonitorLoop(expiry time.Time) bool {
 
 		log.Printf("🔌 Current draw: %d mA", current)
 
-		if current < CurrentThreshold {
+		if current < s.Config.CurrentThreshold {
 			lowCurrentCount++
 			log.Printf("⚠️ Low current (%d checks)", lowCurrentCount)
 		} else {
@@ -73,9 +71,9 @@ func runMonitorLoop(expiry time.Time) bool {
 		}
 
 		// Use Interval to calculate total time before shutdown
-		if time.Duration(lowCurrentCount)*Interval >= time.Duration(LowCurrentMinutes)*time.Minute {
+		if time.Duration(lowCurrentCount)*s.Config.MonitorInterval >= time.Duration(s.Config.LowCurrentMinutes)*time.Minute {
 			log.Println("❌ Turning OFF early due to sustained low current.")
-			err = device.Switch(false)
+			err = s.Device.Switch(false)
 			if err != nil {
 				log.Printf("Error switching off %v", err)
 			}
@@ -85,7 +83,7 @@ func runMonitorLoop(expiry time.Time) bool {
 	return false
 }
 
-func waitAndRetry(delay time.Duration, expiry time.Time) bool {
+func (s *Scheduler) waitAndRetry(delay time.Duration, expiry time.Time) bool {
 	retryTime := time.Now().Add(delay)
 	if retryTime.After(expiry) {
 		log.Println("⏭️ Retry would exceed inching expiry. Skipping.")
@@ -95,11 +93,11 @@ func waitAndRetry(delay time.Duration, expiry time.Time) bool {
 	time.Sleep(delay)
 
 	log.Println("🔁 Retrying: Switching ON device")
-	err := device.Switch(true)
+	err := s.Device.Switch(true)
 	if err != nil {
 		log.Println("❌ Retry switch ON failed:", err)
 		return false
 	}
 
-	return runMonitorLoop(expiry)
+	return s.runMonitorLoop(expiry)
 }

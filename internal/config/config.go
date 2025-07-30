@@ -1,22 +1,35 @@
 package config
 
 import (
+	"flag"
+	"log"
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
-type Config struct {
-	Host              string
-	ClientID          string
-	Secret            string
-	DeviceID          string
-	MaxRetries        int
-	RetryDelay1       time.Duration
-	RetryDelay2       time.Duration
-	CurrentThreshold  int
-	LowCurrentMinutes int
-	MonitorInterval   time.Duration
+var envPath string
+
+func init() {
+	flag.StringVar(&envPath, "env", "", "Optional path to .env file")
+	flag.Parse()
+	if envPath != "" {
+		err := godotenv.Load(envPath)
+		if err != nil {
+			log.Printf("⚠️ Could not load .env from '%s': %v", envPath, err)
+		} else {
+			log.Printf("✅ Loaded .env from: %s", envPath)
+		}
+	} else {
+		err := godotenv.Load()
+		if err != nil {
+			log.Println("No .env file found or unable to load it — relying on OS environment")
+		} else {
+			log.Println("Loading .env from default location")
+		}
+	}
 }
 
 func Load() (*Config, error) {
@@ -24,7 +37,8 @@ func Load() (*Config, error) {
 		Host:              os.Getenv("HOST"),
 		ClientID:          os.Getenv("CLIENT_ID"),
 		Secret:            os.Getenv("SECRET"),
-		DeviceID:          os.Getenv("DEVICE_ID"),
+		PumpDeviceID:      os.Getenv("PUMP_DEVICE_ID"),
+		TankDeviceID:      os.Getenv("TANK_DEVICE_ID"),
 		MaxRetries:        getEnvInt("MAX_RETRIES", 2),
 		RetryDelay1:       getEnvDuration("RETRY_DELAY_1", 30*time.Minute),
 		RetryDelay2:       getEnvDuration("RETRY_DELAY_2", 60*time.Minute),
