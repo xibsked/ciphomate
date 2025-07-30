@@ -20,44 +20,59 @@ func NewScheduler(config *config.Config, device *device.Device) *Scheduler {
 	}
 }
 
-func (s *Scheduler) MonitorUntilExpiry(expiry time.Time) {
-	// start := time.Now()
-	if s.runMonitorLoop(expiry) {
-		log.Println("✅ Inching completed fully. No retries needed.")
-		err := s.Device.Switch(false)
-		if err != nil {
-			log.Printf("Error switching off %v", err)
-		}
+func (s *Scheduler) Start(expiry time.Time) {
+	log.Printf("🕒 Starting monitor. Expiry at %v", expiry)
+
+	success := s.monitorOnce(expiry)
+	if success {
+		log.Println("✅ Initial monitor passed. Turning off device.")
+		_ = s.Device.Switch(false)
 		return
 	}
 
-	retryDelays := []time.Duration{s.Config.RetryDelay1, s.Config.RetryDelay2}
+	log.Println("🔁 Initial monitor failed. Starting retries...")
 
-	for i := 0; i < s.Config.MaxRetries && i < len(retryDelays); i++ {
-		delay := retryDelays[i]
-		log.Printf("🔁 Retry #%d scheduled after %v.", i+1, delay)
-		if s.waitAndRetry(delay, expiry) {
-			log.Printf("✅ Retry #%d succeeded.", i+1)
+	for i := 0; i < s.Config.MaxRetries; i++ {
+		log.Printf("🕒 Waiting %v before retry #%d", s.Config.RetryDelay, i+1)
+		time.Sleep(s.Config.RetryDelay)
+
+		log.Printf("🔁 Retry #%d: Switching ON device", i+1)
+		err := s.Device.Switch(true)
+		if err != nil {
+			log.Printf("❌ Retry #%d switch ON failed: %v", i+1, err)
+			continue
+		}
+
+		// Optional: wait a bit before reading current
+		time.Sleep(2 * time.Second)
+
+		log.Printf("🔍 Retry #%d monitoring started (for %v)...", i+1, expiry)
+		if s.monitorOnce(expiry) {
+			log.Printf("✅ Retry #%d succeeded. Turning off device.", i+1)
+			_ = s.Device.Switch(false)
 			return
 		}
-		log.Printf("❌ Retry #%d failed or skipped.", i+1)
+
+		log.Printf("❌ Retry #%d failed. Continuing...", i+1)
 	}
+
+	log.Println("🚫 All retries exhausted.")
 }
 
-func (s *Scheduler) runMonitorLoop(expiry time.Time) bool {
+func (s *Scheduler) monitorOnce(expiry time.Time) bool {
 	ticker := time.NewTicker(s.Config.MonitorInterval)
 	defer ticker.Stop()
 
 	lowCurrentCount := 0
 	for t := range ticker.C {
 		if t.After(expiry) {
-			log.Println("✅ Device remained ON until expiry.")
+			log.Println("⏰ Monitor period ended naturally.")
 			return true
 		}
 
 		current, err := s.Device.GetCurrent()
 		if err != nil {
-			log.Println("⚠️ Error getting current:", err)
+			log.Println("⚠️ Error reading current:", err)
 			continue
 		}
 
@@ -70,34 +85,11 @@ func (s *Scheduler) runMonitorLoop(expiry time.Time) bool {
 			lowCurrentCount = 0
 		}
 
-		// Use Interval to calculate total time before shutdown
 		if time.Duration(lowCurrentCount)*s.Config.MonitorInterval >= time.Duration(s.Config.LowCurrentMinutes)*time.Minute {
-			log.Println("❌ Turning OFF early due to sustained low current.")
-			err = s.Device.Switch(false)
-			if err != nil {
-				log.Printf("Error switching off %v", err)
-			}
+			log.Println("❌ Early shutdown due to sustained low current.")
+			s.Device.Switch(false)
 			return false
 		}
 	}
 	return false
-}
-
-func (s *Scheduler) waitAndRetry(delay time.Duration, expiry time.Time) bool {
-	retryTime := time.Now().Add(delay)
-	if retryTime.After(expiry) {
-		log.Println("⏭️ Retry would exceed inching expiry. Skipping.")
-		return false
-	}
-
-	time.Sleep(delay)
-
-	log.Println("🔁 Retrying: Switching ON device")
-	err := s.Device.Switch(true)
-	if err != nil {
-		log.Println("❌ Retry switch ON failed:", err)
-		return false
-	}
-
-	return s.runMonitorLoop(expiry)
 }

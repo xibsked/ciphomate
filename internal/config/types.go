@@ -11,8 +11,7 @@ type Config struct {
 	PumpDeviceID      string
 	TankDeviceID      string
 	MaxRetries        int
-	RetryDelay1       time.Duration
-	RetryDelay2       time.Duration
+	RetryDelay        time.Duration
 	CurrentThreshold  int
 	LowCurrentMinutes int
 	MonitorInterval   time.Duration

@@ -37,7 +37,7 @@ func main() {
 	}
 	scheduler := scheduler.NewScheduler(cfg, pump)
 
-	go scheduler.MonitorUntilExpiry(expiry)
+	go scheduler.Start(expiry)
 
 	// Signal handling
 	sigChan := make(chan os.Signal, 1)
