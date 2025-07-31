@@ -34,16 +34,17 @@ func init() {
 
 func Load() (*Config, error) {
 	return &Config{
-		Host:              os.Getenv("HOST"),
-		ClientID:          os.Getenv("CLIENT_ID"),
-		Secret:            os.Getenv("SECRET"),
-		PumpDeviceID:      os.Getenv("PUMP_DEVICE_ID"),
-		TankDeviceID:      os.Getenv("TANK_DEVICE_ID"),
-		MaxRetries:        getEnvInt("MAX_RETRIES", 2),
-		RetryDelay:        getEnvDuration("RETRY_DELAY", 30*time.Minute),
-		CurrentThreshold:  getEnvInt("CURRENT_THRESHOLD", 20),
-		LowCurrentMinutes: getEnvInt("LOW_CURRENT_MINUTES", 5),
-		MonitorInterval:   getEnvDuration("MONITOR_INTERVAL", 2*time.Minute),
+		Host:                 os.Getenv("HOST"),
+		ClientID:             os.Getenv("CLIENT_ID"),
+		Secret:               os.Getenv("SECRET"),
+		PumpDeviceID:         os.Getenv("PUMP_DEVICE_ID"),
+		TankDeviceID:         os.Getenv("TANK_DEVICE_ID"),
+		MaxRetries:           getEnvInt("MAX_RETRIES", 2),
+		RetryDelay:           getEnvDuration("RETRY_DELAY", 30*time.Minute),
+		PumpCurrentThreshold: getEnvInt("PUMP_CURRENT_THRESHOLD", 5000),
+		TankCurrentThreshold: getEnvInt("TANK_CURRENT_THRESHOLD", 100),
+		LowCurrentMinutes:    getEnvInt("LOW_CURRENT_MINUTES", 2),
+		MonitorInterval:      getEnvDuration("MONITOR_INTERVAL", 1*time.Minute),
 	}, nil
 }
 

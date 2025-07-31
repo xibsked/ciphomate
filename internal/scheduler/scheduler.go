@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"log"
+	"os"
 	"time"
 
 	"ciphomate/internal/config"
@@ -10,13 +11,15 @@ import (
 
 type Scheduler struct {
 	Config *config.Config
-	Device *device.Device
+	Pump   *device.Device
+	Tank   *device.Device
 }
 
-func NewScheduler(config *config.Config, device *device.Device) *Scheduler {
+func NewScheduler(config *config.Config, pump *device.Device, tank *device.Device) *Scheduler {
 	return &Scheduler{
 		Config: config,
-		Device: device,
+		Pump:   pump,
+		Tank:   tank,
 	}
 }
 
@@ -26,7 +29,7 @@ func (s *Scheduler) Start(expiry time.Time) {
 	success := s.monitorOnce(expiry)
 	if success {
 		log.Println("✅ Initial monitor passed. Turning off device.")
-		_ = s.Device.Switch(false)
+		_ = s.Pump.Switch(false)
 		return
 	}
 
@@ -37,7 +40,7 @@ func (s *Scheduler) Start(expiry time.Time) {
 		time.Sleep(s.Config.RetryDelay)
 
 		log.Printf("🔁 Retry #%d: Switching ON device", i+1)
-		err := s.Device.Switch(true)
+		err := s.Pump.Switch(true)
 		if err != nil {
 			log.Printf("❌ Retry #%d switch ON failed: %v", i+1, err)
 			continue
@@ -49,7 +52,7 @@ func (s *Scheduler) Start(expiry time.Time) {
 		log.Printf("🔍 Retry #%d monitoring started (for %v)...", i+1, expiry)
 		if s.monitorOnce(expiry) {
 			log.Printf("✅ Retry #%d succeeded. Turning off device.", i+1)
-			_ = s.Device.Switch(false)
+			_ = s.Pump.Switch(false)
 			return
 		}
 
@@ -70,7 +73,7 @@ func (s *Scheduler) monitorOnce(expiry time.Time) bool {
 			return true
 		}
 
-		current, err := s.Device.GetCurrent()
+		current, err := s.Pump.GetCurrent()
 		if err != nil {
 			log.Println("⚠️ Error reading current:", err)
 			continue
@@ -78,7 +81,7 @@ func (s *Scheduler) monitorOnce(expiry time.Time) bool {
 
 		log.Printf("🔌 Current draw: %d mA", current)
 
-		if current < s.Config.CurrentThreshold {
+		if current < s.Config.PumpCurrentThreshold {
 			lowCurrentCount++
 			log.Printf("⚠️ Low current (%d checks)", lowCurrentCount)
 		} else {
@@ -87,8 +90,18 @@ func (s *Scheduler) monitorOnce(expiry time.Time) bool {
 
 		if time.Duration(lowCurrentCount)*s.Config.MonitorInterval >= time.Duration(s.Config.LowCurrentMinutes)*time.Minute {
 			log.Println("❌ Early shutdown due to sustained low current.")
-			s.Device.Switch(false)
+			s.Pump.Switch(false)
 			return false
+		}
+
+		tankCurrent, err := s.Tank.GetCurrent()
+		if err != nil {
+			log.Printf("Cannot get current of tank: %+v", err)
+		}
+
+		if tankCurrent >= s.Config.TankCurrentThreshold {
+			log.Printf("Tank is full, terminating the ciphomate")
+			os.Exit(0)
 		}
 	}
 	return false

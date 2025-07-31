@@ -20,16 +20,19 @@ func NewDevice(client *tuya.TuyaClient, deviceID string) *Device {
 }
 
 func (d *Device) FetchInchingTime() (int, error) {
-	// return 15, nil
+	defaultInching := 180
+
+	// return defaultInching, nil
+
 	path := fmt.Sprintf("/v1.0/devices/%s/status", d.DeviceID)
 	resp, err := d.Client.SendRequest("GET", path, nil)
 	if err != nil {
-		return 60, err
+		return defaultInching, err
 	}
 	var result StatusResponse
 	err = json.Unmarshal(resp, &result)
 	if err != nil {
-		return 60, err
+		return defaultInching, err
 	}
 
 	log.Printf("result: %+v", result)
@@ -46,7 +49,7 @@ func (d *Device) FetchInchingTime() (int, error) {
 			return minutes, nil
 		}
 	}
-	return 60, fmt.Errorf("switch_inching not found in status")
+	return defaultInching, fmt.Errorf("switch_inching not found in status")
 }
 
 func (d *Device) GetCurrent() (int, error) {
