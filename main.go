@@ -23,7 +23,7 @@ func main() {
 	tm := tuya.NewTokenManager(cfg, "token_cache.json")
 	client := tuya.NewTuyaClient(cfg, tm)
 	pump := device.NewDevice(client, cfg.PumpDeviceID)
-	tank := device.NewDevice(client, cfg.PumpDeviceID)
+	tank := device.NewDevice(client, cfg.TankDeviceID)
 
 	tankCurrent, err := tank.GetCurrent()
 	if err != nil {
