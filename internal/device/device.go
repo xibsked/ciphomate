@@ -43,10 +43,18 @@ func (d *Device) FetchInchingTime() (int, error) {
 				log.Printf("Failed to decode switch_inching: %v", err)
 				continue
 			}
-			minutes := seconds / 60
 			log.Printf("Inching enabled: %v", enabled)
+			var minutes = 0
+
+			if enabled {
+				minutes = seconds / 60
+			} else {
+				minutes = defaultInching
+			}
+
 			log.Printf("Inching time (from device): %d minutes", minutes)
 			return minutes, nil
+
 		}
 	}
 	return defaultInching, fmt.Errorf("switch_inching not found in status")

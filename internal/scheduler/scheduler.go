@@ -100,7 +100,13 @@ func (s *Scheduler) monitorOnce(expiry time.Time) bool {
 		}
 
 		if tankCurrent >= s.Config.TankCurrentThreshold {
-			log.Printf("Tank is full, terminating the ciphomate")
+			log.Printf("Tank level detection current is %d", tankCurrent)
+			log.Printf("Tank level detection current threshold is %d", s.Config.TankCurrentThreshold)
+			log.Printf("Tank is full, switching the pump off.")
+
+			s.Pump.Switch(false)
+
+			log.Printf("Terminating the ciphomate")
 			os.Exit(0)
 		}
 	}
