@@ -6,79 +6,42 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 )
 
-var (
-	Host     = ""
-	ClientID = ""
-	Secret   = ""
-	DeviceID = ""
-)
-
-func Load(cfg *config.Config) {
-	Host = cfg.Host
-	ClientID = cfg.ClientID
-	Secret = cfg.Secret
-	DeviceID = cfg.DeviceID
+func NewTuyaClient(cfg *config.Config, tm *TokenManager) *TuyaClient {
+	return &TuyaClient{
+		tokenManager: tm,
+		config:       cfg,
+		httpClient:   &http.Client{Timeout: 10 * time.Second},
+	}
 }
 
-type TokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	ExpireTime   int    `json:"expire_time"`
-	RefreshToken string `json:"refresh_token"`
-	UID          string `json:"uid"`
-}
-
-func GetToken() (TokenResponse, error) {
-	path := "/v1.0/token?grant_type=1"
-	t := fmt.Sprint(time.Now().UnixNano() / 1e6)
-	contentHash := Sha256([]byte(""))
-	stringToSign := fmt.Sprintf("GET\n%s\n\n%s", contentHash, path)
-	signStr := ClientID + t + stringToSign
-	sign := strings.ToUpper(HmacSha256(signStr, Secret))
-
-	req, _ := http.NewRequest("GET", Host+path, nil)
-	req.Header.Set("client_id", ClientID)
-	req.Header.Set("sign", sign)
-	req.Header.Set("t", t)
-	req.Header.Set("sign_method", "HMAC-SHA256")
-
-	resp, err := http.DefaultClient.Do(req)
+func (c *TuyaClient) SendRequest(method, path string, body []byte) ([]byte, error) {
+	token, err := c.tokenManager.GetToken()
 	if err != nil {
-		return TokenResponse{}, err
+		return nil, err
 	}
-	defer resp.Body.Close()
+	clientID := c.config.ClientID
+	host := c.config.Host
+	secret := c.config.Secret
 
-	body, _ := io.ReadAll(resp.Body)
-	log.Println("Token API Response:", string(body))
-
-	var result struct {
-		Result TokenResponse `json:"result"`
-	}
-	err = json.Unmarshal(body, &result)
-	return result.Result, err
-}
-
-func SendRequest(method, path string, body []byte) ([]byte, error) {
 	t := fmt.Sprint(time.Now().UnixNano() / 1e6)
 	contentHash := Sha256(body)
 	stringToSign := fmt.Sprintf("%s\n%s\n\n%s", method, contentHash, path)
-	signStr := ClientID + Token + t + stringToSign
-	sign := strings.ToUpper(HmacSha256(signStr, Secret))
+	signStr := clientID + token + t + stringToSign
+	sign := strings.ToUpper(HmacSha256(signStr, secret))
 
-	req, _ := http.NewRequest(method, Host+path, bytes.NewReader(body))
-	req.Header.Set("client_id", ClientID)
+	req, _ := http.NewRequest(method, host+path, bytes.NewReader(body))
+	req.Header.Set("client_id", clientID)
 	req.Header.Set("sign", sign)
 	req.Header.Set("t", t)
 	req.Header.Set("sign_method", "HMAC-SHA256")
-	req.Header.Set("access_token", Token)
+	req.Header.Set("access_token", token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)

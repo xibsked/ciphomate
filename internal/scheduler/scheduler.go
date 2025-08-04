@@ -2,104 +2,113 @@ package scheduler
 
 import (
 	"log"
+	"os"
 	"time"
 
 	"ciphomate/internal/config"
 	"ciphomate/internal/device"
 )
 
-var (
-	MaxRetries        = 2
-	RetryDelays       = []time.Duration{30 * time.Minute, 60 * time.Minute}
-	CurrentThreshold  = 20 // in mA
-	LowCurrentMinutes = 5  // consecutive low current minutes before shutdown
-	Interval          = 2 * time.Minute
-)
-
-func Load(cfg *config.Config) {
-	MaxRetries = cfg.MaxRetries
-	RetryDelays = []time.Duration{cfg.RetryDelay1, cfg.RetryDelay2}
-	CurrentThreshold = cfg.CurrentThreshold
-	LowCurrentMinutes = cfg.LowCurrentMinutes
-	Interval = cfg.MonitorInterval
+type Scheduler struct {
+	Config *config.Config
+	Pump   *device.Device
+	Tank   *device.Device
 }
 
-func MonitorUntilExpiry(expiry time.Time) {
-	// start := time.Now()
-	if runMonitorLoop(expiry) {
-		log.Println("✅ Inching completed fully. No retries needed.")
-		err := device.Switch(false)
-		if err != nil {
-			log.Printf("Error switching off %v", err)
-		}
+func NewScheduler(config *config.Config, pump *device.Device, tank *device.Device) *Scheduler {
+	return &Scheduler{
+		Config: config,
+		Pump:   pump,
+		Tank:   tank,
+	}
+}
+
+func (s *Scheduler) Start(expiry time.Time) {
+	log.Printf("🕒 Starting monitor. Expiry at %v", expiry)
+
+	success := s.monitorOnce(expiry)
+	if success {
+		log.Println("✅ Initial monitor passed. Turning off device.")
+		_ = s.Pump.Switch(false)
 		return
 	}
 
-	for i := 0; i < MaxRetries && i < len(RetryDelays); i++ {
-		delay := RetryDelays[i]
-		log.Printf("🔁 Retry #%d scheduled after %v.", i+1, delay)
-		if waitAndRetry(delay, expiry) {
-			log.Printf("✅ Retry #%d succeeded.", i+1)
+	log.Println("🔁 Initial monitor failed. Starting retries...")
+
+	for i := 0; i < s.Config.MaxRetries; i++ {
+		log.Printf("🕒 Waiting %v before retry #%d", s.Config.RetryDelay, i+1)
+		time.Sleep(s.Config.RetryDelay)
+
+		log.Printf("🔁 Retry #%d: Switching ON device", i+1)
+		err := s.Pump.Switch(true)
+		if err != nil {
+			log.Printf("❌ Retry #%d switch ON failed: %v", i+1, err)
+			continue
+		}
+
+		// Optional: wait a bit before reading current
+		time.Sleep(2 * time.Second)
+
+		log.Printf("🔍 Retry #%d monitoring started (for %v)...", i+1, expiry)
+		if s.monitorOnce(expiry) {
+			log.Printf("✅ Retry #%d succeeded. Turning off device.", i+1)
+			_ = s.Pump.Switch(false)
 			return
 		}
-		log.Printf("❌ Retry #%d failed or skipped.", i+1)
+
+		log.Printf("❌ Retry #%d failed. Continuing...", i+1)
 	}
+
+	log.Println("🚫 All retries exhausted.")
 }
 
-func runMonitorLoop(expiry time.Time) bool {
-	ticker := time.NewTicker(Interval)
+func (s *Scheduler) monitorOnce(expiry time.Time) bool {
+	ticker := time.NewTicker(s.Config.MonitorInterval)
 	defer ticker.Stop()
 
 	lowCurrentCount := 0
 	for t := range ticker.C {
 		if t.After(expiry) {
-			log.Println("✅ Device remained ON until expiry.")
+			log.Println("⏰ Monitor period ended naturally.")
 			return true
 		}
 
-		current, err := device.GetCurrent()
+		current, err := s.Pump.GetCurrent()
 		if err != nil {
-			log.Println("⚠️ Error getting current:", err)
+			log.Println("⚠️ Error reading current:", err)
 			continue
 		}
 
 		log.Printf("🔌 Current draw: %d mA", current)
 
-		if current < CurrentThreshold {
+		if current < s.Config.PumpCurrentThreshold {
 			lowCurrentCount++
 			log.Printf("⚠️ Low current (%d checks)", lowCurrentCount)
 		} else {
 			lowCurrentCount = 0
 		}
 
-		// Use Interval to calculate total time before shutdown
-		if time.Duration(lowCurrentCount)*Interval >= time.Duration(LowCurrentMinutes)*time.Minute {
-			log.Println("❌ Turning OFF early due to sustained low current.")
-			err = device.Switch(false)
-			if err != nil {
-				log.Printf("Error switching off %v", err)
-			}
+		if time.Duration(lowCurrentCount)*s.Config.MonitorInterval >= time.Duration(s.Config.LowCurrentMinutes)*time.Minute {
+			log.Println("❌ Early shutdown due to sustained low current.")
+			s.Pump.Switch(false)
 			return false
+		}
+
+		tankCurrent, err := s.Tank.GetCurrent()
+		if err != nil {
+			log.Printf("Cannot get current of tank: %+v", err)
+		}
+
+		if tankCurrent >= s.Config.TankCurrentThreshold {
+			log.Printf("Tank level detection current is %d", tankCurrent)
+			log.Printf("Tank level detection current threshold is %d", s.Config.TankCurrentThreshold)
+			log.Printf("Tank is full, switching the pump off.")
+
+			s.Pump.Switch(false)
+
+			log.Printf("Terminating the ciphomate")
+			os.Exit(0)
 		}
 	}
 	return false
-}
-
-func waitAndRetry(delay time.Duration, expiry time.Time) bool {
-	retryTime := time.Now().Add(delay)
-	if retryTime.After(expiry) {
-		log.Println("⏭️ Retry would exceed inching expiry. Skipping.")
-		return false
-	}
-
-	time.Sleep(delay)
-
-	log.Println("🔁 Retrying: Switching ON device")
-	err := device.Switch(true)
-	if err != nil {
-		log.Println("❌ Retry switch ON failed:", err)
-		return false
-	}
-
-	return runMonitorLoop(expiry)
 }

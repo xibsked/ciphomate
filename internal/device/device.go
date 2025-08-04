@@ -7,33 +7,32 @@ import (
 	"log"
 )
 
-type StatusResponse struct {
-	Result []struct {
-		Code  string      `json:"code"`
-		Value interface{} `json:"value"`
-	} `json:"result"`
+type Device struct {
+	Client   *tuya.TuyaClient
+	DeviceID string
 }
 
-type Command struct {
-	Code  string      `json:"code"`
-	Value interface{} `json:"value"`
+func NewDevice(client *tuya.TuyaClient, deviceID string) *Device {
+	return &Device{
+		Client:   client,
+		DeviceID: deviceID,
+	}
 }
 
-type CommandRequest struct {
-	Commands []Command `json:"commands"`
-}
+func (d *Device) FetchInchingTime() (int, error) {
+	defaultInching := 180
 
-func FetchInchingTime() (int, error) {
-	// return 15, nil
-	path := fmt.Sprintf("/v1.0/devices/%s/status", tuya.DeviceID)
-	resp, err := tuya.SendRequest("GET", path, nil)
+	// return defaultInching, nil
+
+	path := fmt.Sprintf("/v1.0/devices/%s/status", d.DeviceID)
+	resp, err := d.Client.SendRequest("GET", path, nil)
 	if err != nil {
-		return 60, err
+		return defaultInching, err
 	}
 	var result StatusResponse
 	err = json.Unmarshal(resp, &result)
 	if err != nil {
-		return 60, err
+		return defaultInching, err
 	}
 
 	log.Printf("result: %+v", result)
@@ -44,19 +43,27 @@ func FetchInchingTime() (int, error) {
 				log.Printf("Failed to decode switch_inching: %v", err)
 				continue
 			}
-			minutes := seconds / 60
 			log.Printf("Inching enabled: %v", enabled)
+			var minutes = 0
+
+			if enabled {
+				minutes = seconds / 60
+			} else {
+				minutes = defaultInching
+			}
+
 			log.Printf("Inching time (from device): %d minutes", minutes)
 			return minutes, nil
+
 		}
 	}
-	return 60, fmt.Errorf("switch_inching not found in status")
+	return defaultInching, fmt.Errorf("switch_inching not found in status")
 }
 
-func GetCurrent() (int, error) {
+func (d *Device) GetCurrent() (int, error) {
 	// return 0, nil
-	path := fmt.Sprintf("/v1.0/devices/%s/status", tuya.DeviceID)
-	resp, err := tuya.SendRequest("GET", path, nil)
+	path := fmt.Sprintf("/v1.0/devices/%s/status", d.DeviceID)
+	resp, err := d.Client.SendRequest("GET", path, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -74,7 +81,7 @@ func GetCurrent() (int, error) {
 	return 0, fmt.Errorf("cur_current not found")
 }
 
-func Switch(on bool) error {
+func (d *Device) Switch(on bool) error {
 	// return nil
 	cmd := CommandRequest{
 		Commands: []Command{{
@@ -83,7 +90,7 @@ func Switch(on bool) error {
 		}},
 	}
 	payload, _ := json.Marshal(cmd)
-	path := fmt.Sprintf("/v1.0/devices/%s/commands", tuya.DeviceID)
-	_, err := tuya.SendRequest("POST", path, payload)
+	path := fmt.Sprintf("/v1.0/devices/%s/commands", d.DeviceID)
+	_, err := d.Client.SendRequest("POST", path, payload)
 	return err
 }
