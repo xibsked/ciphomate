@@ -2,10 +2,13 @@ package device
 
 import (
 	"ciphomate/internal/tuya"
+	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 )
+
+const defaultInchingMinutes = 180
 
 type Device struct {
 	Client   *tuya.TuyaClient
@@ -20,77 +23,128 @@ func NewDevice(client *tuya.TuyaClient, deviceID string) *Device {
 }
 
 func (d *Device) FetchInchingTime() (int, error) {
-	defaultInching := 180
+	return d.FetchInchingTimeContext(context.Background())
+}
 
-	// return defaultInching, nil
-
+func (d *Device) FetchInchingTimeContext(ctx context.Context) (int, error) {
 	path := fmt.Sprintf("/v1.0/devices/%s/status", d.DeviceID)
-	resp, err := d.Client.SendRequest("GET", path, nil)
+	resp, err := d.Client.SendRequestContext(ctx, "GET", path, nil)
 	if err != nil {
-		return defaultInching, err
+		return defaultInchingMinutes, fmt.Errorf("fetch status for device %q: %w", d.DeviceID, err)
 	}
 	var result StatusResponse
 	err = json.Unmarshal(resp, &result)
 	if err != nil {
-		return defaultInching, err
+		return defaultInchingMinutes, fmt.Errorf("decode status for device %q: %w", d.DeviceID, err)
 	}
 
-	log.Printf("result: %+v", result)
+	slog.Debug("device status received",
+		"component", "device",
+		"device_id", d.DeviceID,
+		"status_item_count", len(result.Result),
+	)
 	for _, item := range result.Result {
 		if item.Code == "switch_inching" {
 			enabled, seconds, err := DecodeSwitchInching(item.Value)
 			if err != nil {
-				log.Printf("Failed to decode switch_inching: %v", err)
-				continue
+				slog.Warn("could not decode switch inching value; using default",
+					"component", "device",
+					"device_id", d.DeviceID,
+					"status_code", item.Code,
+					"default_minutes", defaultInchingMinutes,
+					"error", err,
+				)
+				return defaultInchingMinutes, nil
 			}
-			log.Printf("Inching enabled: %v", enabled)
-			var minutes = 0
 
+			minutes := 0
 			if enabled {
 				minutes = seconds / 60
 			} else {
-				minutes = defaultInching
+				minutes = defaultInchingMinutes
 			}
 
-			log.Printf("Inching time (from device): %d minutes", minutes)
+			slog.Info("device inching time determined",
+				"component", "device",
+				"device_id", d.DeviceID,
+				"enabled", enabled,
+				"duration_seconds", seconds,
+				"duration_minutes", minutes,
+			)
 			return minutes, nil
 
 		}
 	}
-	return defaultInching, fmt.Errorf("switch_inching not found in status")
+	slog.Warn("switch inching status missing; using default",
+		"component", "device",
+		"device_id", d.DeviceID,
+		"default_minutes", defaultInchingMinutes,
+	)
+	return defaultInchingMinutes, nil
 }
 
 func (d *Device) GetCurrent() (int, error) {
+	return d.GetCurrentContext(context.Background())
+}
+
+func (d *Device) GetCurrentContext(ctx context.Context) (int, error) {
 	// return 0, nil
 	path := fmt.Sprintf("/v1.0/devices/%s/status", d.DeviceID)
-	resp, err := d.Client.SendRequest("GET", path, nil)
+	resp, err := d.Client.SendRequestContext(ctx, "GET", path, nil)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("fetch status for device %q: %w", d.DeviceID, err)
 	}
 	var result StatusResponse
 	err = json.Unmarshal(resp, &result)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("decode status for device %q: %w", d.DeviceID, err)
 	}
 
 	for _, item := range result.Result {
 		if item.Code == "cur_current" {
-			return int(item.Value.(float64)), nil
+			switch value := item.Value.(type) {
+			case float64:
+				return int(value), nil
+			case int:
+				return value, nil
+			default:
+				return 0, fmt.Errorf("unexpected current value type for device %q: %T", d.DeviceID, item.Value)
+			}
 		}
 	}
-	return 0, fmt.Errorf("cur_current not found")
+	return 0, fmt.Errorf("cur_current not found in status for device %q", d.DeviceID)
 }
 
 func (d *Device) Switch(on bool) error {
-	// return nil
+	return d.SwitchContext(context.Background(), on)
+}
+
+func (d *Device) SwitchContext(ctx context.Context, on bool) error {
 	cmd := CommandRequest{
 		Commands: []Command{{
 			Code:  "switch_1",
 			Value: on,
 		}},
 	}
-	payload, _ := json.Marshal(cmd)
+	payload, err := json.Marshal(cmd)
+	if err != nil {
+		return fmt.Errorf("encode switch command for device %q: %w", d.DeviceID, err)
+	}
 	path := fmt.Sprintf("/v1.0/devices/%s/commands", d.DeviceID)
-	_, err := d.Client.SendRequest("POST", path, payload)
-	return err
+	_, err = d.Client.SendRequestContext(ctx, "POST", path, payload)
+	if err != nil {
+		slog.Error("device switch command failed",
+			"component", "device",
+			"device_id", d.DeviceID,
+			"on", on,
+			"error", err,
+		)
+		return fmt.Errorf("switch device %q to %t: %w", d.DeviceID, on, err)
+	}
+	slog.Info("device switch command succeeded",
+		"component", "device",
+		"device_id", d.DeviceID,
+		"on", on,
+	)
+	return nil
 }

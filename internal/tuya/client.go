@@ -3,11 +3,14 @@ package tuya
 import (
 	"bytes"
 	"ciphomate/internal/config"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -22,9 +25,13 @@ func NewTuyaClient(cfg *config.Config, tm *TokenManager) *TuyaClient {
 }
 
 func (c *TuyaClient) SendRequest(method, path string, body []byte) ([]byte, error) {
-	token, err := c.tokenManager.GetToken()
+	return c.SendRequestContext(context.Background(), method, path, body)
+}
+
+func (c *TuyaClient) SendRequestContext(ctx context.Context, method, path string, body []byte) ([]byte, error) {
+	token, err := c.tokenManager.GetTokenContext(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get Tuya access token: %w", err)
 	}
 	clientID := c.config.ClientID
 	host := c.config.Host
@@ -36,7 +43,10 @@ func (c *TuyaClient) SendRequest(method, path string, body []byte) ([]byte, erro
 	signStr := clientID + token + t + stringToSign
 	sign := strings.ToUpper(HmacSha256(signStr, secret))
 
-	req, _ := http.NewRequest(method, host+path, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, method, host+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create Tuya %s request: %w", method, err)
+	}
 	req.Header.Set("client_id", clientID)
 	req.Header.Set("sign", sign)
 	req.Header.Set("t", t)
@@ -44,12 +54,56 @@ func (c *TuyaClient) SendRequest(method, path string, body []byte) ([]byte, erro
 	req.Header.Set("access_token", token)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	startedAt := time.Now()
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		slog.Warn("Tuya request failed",
+			"component", "tuya",
+			"method", method,
+			"path", path,
+			"duration", time.Since(startedAt),
+			"error", err,
+		)
+		return nil, fmt.Errorf("Tuya %s %s request failed: %w", method, path, err)
 	}
 	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		slog.Warn("failed to read Tuya response",
+			"component", "tuya",
+			"method", method,
+			"path", path,
+			"http_status", resp.StatusCode,
+			"duration", time.Since(startedAt),
+			"error", err,
+		)
+		return nil, fmt.Errorf("read Tuya %s %s response: %w", method, path, err)
+	}
+
+	slog.Debug("Tuya request completed",
+		"component", "tuya",
+		"method", method,
+		"path", path,
+		"http_status", resp.StatusCode,
+		"duration", time.Since(startedAt),
+	)
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("Tuya %s %s returned HTTP %d", method, path, resp.StatusCode)
+	}
+	var apiResponse struct {
+		Success *bool `json:"success"`
+	}
+	if err := json.Unmarshal(responseBody, &apiResponse); err == nil && apiResponse.Success != nil && !*apiResponse.Success {
+		slog.Warn("Tuya API reported request failure",
+			"component", "tuya",
+			"method", method,
+			"path", path,
+			"http_status", resp.StatusCode,
+		)
+		return nil, fmt.Errorf("Tuya %s %s reported success=false", method, path)
+	}
+	return responseBody, nil
 }
 
 func Sha256(data []byte) string {

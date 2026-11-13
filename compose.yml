@@ -1,0 +1,7 @@
+services:
+  ciphomate:
+    build: .
+    env_file:
+      - .env
+    container_name: ciphomate
+    restart: unless-stopped

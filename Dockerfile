@@ -17,21 +17,11 @@ WORKDIR /app
 
 # Copy binary from builder
 COPY --from=builder /app/ciphomate /app/ciphomate
-COPY --from=builder /app/.env /app/.env
+COPY scripts/start.sh /app/start.sh
+COPY scripts/stop.sh /app/stop.sh
+COPY scripts/entrypoint.sh /app/entrypoint.sh
+COPY scripts/write-cron-env.sh /app/write-cron-env.sh
 
-# Create start/stop scripts
-RUN echo '#!/bin/bash\n/app/ciphomate --env /app/.env & echo $! > /tmp/ciphomate.pid' > /app/start.sh && \
-    echo '#!/bin/bash\nif [ -f /tmp/ciphomate.pid ]; then kill $(cat /tmp/ciphomate.pid) && rm /tmp/ciphomate.pid; else echo "PID not found"; fi' > /app/stop.sh && \
-    chmod +x /app/start.sh /app/stop.sh
+RUN chmod +x /app/start.sh /app/stop.sh /app/entrypoint.sh /app/write-cron-env.sh
 
-# Run cron with dynamic times from ENV
-CMD bash -c '\
-  START_MIN=$(echo "$START_TIME" | cut -d: -f2); \
-  START_HOUR=$(echo "$START_TIME" | cut -d: -f1); \
-  STOP_MIN=$(echo "$STOP_TIME" | cut -d: -f2); \
-  STOP_HOUR=$(echo "$STOP_TIME" | cut -d: -f1); \
-  echo "$START_MIN $START_HOUR * * * root /app/start.sh >> /var/log/cron.log 2>&1" > /etc/crontab; \
-  echo "$STOP_MIN $STOP_HOUR * * * root /app/stop.sh >> /var/log/cron.log 2>&1" >> /etc/crontab; \
-  ln -fs /usr/share/zoneinfo/$TZ /etc/localtime && dpkg-reconfigure -f noninteractive tzdata; \
-  echo "Container timezone: $(date)"; \
-  cron -f'
+CMD ["/app/entrypoint.sh"]
