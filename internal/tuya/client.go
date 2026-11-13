@@ -3,6 +3,7 @@ package tuya
 import (
 	"bytes"
 	"ciphomate/internal/config"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -24,7 +25,11 @@ func NewTuyaClient(cfg *config.Config, tm *TokenManager) *TuyaClient {
 }
 
 func (c *TuyaClient) SendRequest(method, path string, body []byte) ([]byte, error) {
-	token, err := c.tokenManager.GetToken()
+	return c.SendRequestContext(context.Background(), method, path, body)
+}
+
+func (c *TuyaClient) SendRequestContext(ctx context.Context, method, path string, body []byte) ([]byte, error) {
+	token, err := c.tokenManager.GetTokenContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get Tuya access token: %w", err)
 	}
@@ -38,7 +43,7 @@ func (c *TuyaClient) SendRequest(method, path string, body []byte) ([]byte, erro
 	signStr := clientID + token + t + stringToSign
 	sign := strings.ToUpper(HmacSha256(signStr, secret))
 
-	req, err := http.NewRequest(method, host+path, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, method, host+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create Tuya %s request: %w", method, err)
 	}

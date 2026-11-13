@@ -11,9 +11,11 @@ import (
 )
 
 var envPath string
+var offOnly bool
 
 func init() {
 	flag.StringVar(&envPath, "env", "", "Optional path to .env file")
+	flag.BoolVar(&offOnly, "off", false, "Send a switch-off command to the pump and exit")
 }
 
 func Load() (*Config, error) {
@@ -36,10 +38,12 @@ func Load() (*Config, error) {
 		}
 	}
 	return &Config{
+		OffOnly:              offOnly,
 		Host:                 os.Getenv("HOST"),
 		ClientID:             os.Getenv("CLIENT_ID"),
 		Secret:               os.Getenv("SECRET"),
 		LogLevel:             getEnv("LOG_LEVEL", "info"),
+		TokenCachePath:       getEnv("TOKEN_CACHE_PATH", "/run/ciphomate-token-cache.json"),
 		PumpDeviceID:         os.Getenv("PUMP_DEVICE_ID"),
 		TankDeviceID:         os.Getenv("TANK_DEVICE_ID"),
 		MaxRetries:           getEnvInt("MAX_RETRIES", 2),

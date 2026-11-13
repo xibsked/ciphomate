@@ -2,6 +2,7 @@ package tuya
 
 import (
 	"ciphomate/internal/config"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +20,10 @@ func NewTokenManager(cfg *config.Config, cachePath string) *TokenManager {
 	}
 }
 func (tm *TokenManager) GetToken() (string, error) {
+	return tm.GetTokenContext(context.Background())
+}
+
+func (tm *TokenManager) GetTokenContext(ctx context.Context) (string, error) {
 	if err := tm.loadTokenFromCache(); err == nil {
 		if time.Now().Before(tm.ExpiresAt) {
 			slog.Debug("using cached Tuya access token", "component", "tuya.auth", "expires_at", tm.ExpiresAt)
@@ -30,7 +35,7 @@ func (tm *TokenManager) GetToken() (string, error) {
 	}
 
 	slog.Info("requesting Tuya access token", "component", "tuya.auth")
-	resp, err := fetchToken(tm.Config)
+	resp, err := fetchToken(ctx, tm.Config)
 	if err != nil {
 		return "", err
 	}
@@ -50,7 +55,7 @@ func (tm *TokenManager) GetToken() (string, error) {
 	return tm.Token, nil
 }
 
-func fetchToken(config *config.Config) (TokenResponse, error) {
+func fetchToken(ctx context.Context, config *config.Config) (TokenResponse, error) {
 	clientID := config.ClientID
 	host := config.Host
 	secret := config.Secret
@@ -62,7 +67,7 @@ func fetchToken(config *config.Config) (TokenResponse, error) {
 	signStr := clientID + t + stringToSign
 	sign := strings.ToUpper(HmacSha256(signStr, secret))
 
-	req, err := http.NewRequest("GET", host+path, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", host+path, nil)
 	if err != nil {
 		return TokenResponse{}, fmt.Errorf("create Tuya token request: %w", err)
 	}

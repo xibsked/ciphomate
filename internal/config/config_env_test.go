@@ -25,6 +25,7 @@ START_TIME=06:15
 STOP_TIME=22:45
 TZ=Asia/Kolkata
 LOG_LEVEL=debug
+TOKEN_CACHE_PATH=/run/test-token-cache.json
 MAX_RETRIES=3
 RETRY_DELAY=45m
 PUMP_CURRENT_THRESHOLD=4000
@@ -46,6 +47,7 @@ MONITOR_INTERVAL=30s
 		"STOP_TIME":              "22:45",
 		"TZ":                     "Asia/Kolkata",
 		"LOG_LEVEL":              "debug",
+		"TOKEN_CACHE_PATH":       "/run/test-token-cache.json",
 		"MAX_RETRIES":            "3",
 		"RETRY_DELAY":            "45m",
 		"PUMP_CURRENT_THRESHOLD": "4000",
@@ -57,7 +59,7 @@ MONITOR_INTERVAL=30s
 	command := exec.Command(
 		"docker", "compose",
 		"--project-directory", projectDir,
-		"-f", filepath.Join(repoRoot, "docker-compose.yml"),
+		"-f", filepath.Join(repoRoot, "compose.yml"),
 		"config", "--format", "json",
 	)
 	output, err := command.CombinedOutput()
@@ -108,7 +110,7 @@ MONITOR_INTERVAL=30s
 	}
 
 	for _, name := range []string{
-		"HOST", "CLIENT_ID", "SECRET", "LOG_LEVEL", "PUMP_DEVICE_ID", "TANK_DEVICE_ID",
+		"HOST", "CLIENT_ID", "SECRET", "LOG_LEVEL", "TOKEN_CACHE_PATH", "PUMP_DEVICE_ID", "TANK_DEVICE_ID",
 		"MAX_RETRIES", "RETRY_DELAY", "PUMP_CURRENT_THRESHOLD",
 		"TANK_CURRENT_THRESHOLD", "LOW_CURRENT_MINUTES", "MONITOR_INTERVAL",
 	} {
@@ -122,6 +124,7 @@ MONITOR_INTERVAL=30s
 		cfg.ClientID != expected["CLIENT_ID"] ||
 		cfg.Secret != expected["SECRET"] ||
 		cfg.LogLevel != expected["LOG_LEVEL"] ||
+		cfg.TokenCachePath != expected["TOKEN_CACHE_PATH"] ||
 		cfg.PumpDeviceID != expected["PUMP_DEVICE_ID"] ||
 		cfg.TankDeviceID != expected["TANK_DEVICE_ID"] ||
 		cfg.MaxRetries != 3 ||

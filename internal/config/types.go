@@ -5,10 +5,12 @@ import (
 )
 
 type Config struct {
+	OffOnly              bool
 	Host                 string
 	ClientID             string
 	Secret               string
 	LogLevel             string
+	TokenCachePath       string
 	PumpDeviceID         string
 	TankDeviceID         string
 	MaxRetries           int

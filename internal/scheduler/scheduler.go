@@ -1,8 +1,8 @@
 package scheduler
 
 import (
+	"context"
 	"log/slog"
-	"os"
 	"time"
 
 	"ciphomate/internal/config"
@@ -23,16 +23,19 @@ func NewScheduler(config *config.Config, pump *device.Device, tank *device.Devic
 	}
 }
 
-func (s *Scheduler) Start(expiry time.Time) {
+func (s *Scheduler) Start(ctx context.Context, expiry time.Time) {
 	logger := slog.With("component", "scheduler")
 	logger.Info("monitor started", "expires_at", expiry)
 
-	success := s.monitorOnce(expiry)
-	if success {
+	result := s.monitorOnce(ctx, expiry)
+	switch result {
+	case monitorCompleted:
 		logger.Info("monitor period completed; switching pump off")
-		if err := s.Pump.Switch(false); err != nil {
+		if err := s.Pump.SwitchContext(ctx, false); err != nil {
 			logger.Error("failed to switch pump off after monitor completed", "error", err)
 		}
+		return
+	case monitorTankFull, monitorCanceled:
 		return
 	}
 
@@ -40,23 +43,45 @@ func (s *Scheduler) Start(expiry time.Time) {
 
 	for i := 0; i < s.Config.MaxRetries; i++ {
 		logger.Info("waiting before retry", "retry", i+1, "retry_delay", s.Config.RetryDelay)
-		time.Sleep(s.Config.RetryDelay)
+		timer := time.NewTimer(s.Config.RetryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			logger.Info("retry wait canceled by shutdown")
+			return
+		case <-timer.C:
+		}
 
 		logger.Info("retry switching pump on", "retry", i+1)
-		err := s.Pump.Switch(true)
+		err := s.Pump.SwitchContext(ctx, true)
 		if err != nil {
+			if ctx.Err() != nil {
+				logger.Info("retry switch canceled by shutdown", "retry", i+1)
+				return
+			}
 			logger.Error("retry failed to switch pump on", "retry", i+1, "error", err)
 			continue
 		}
 
-		time.Sleep(2 * time.Second)
+		timer = time.NewTimer(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			logger.Info("retry monitoring canceled by shutdown", "retry", i+1)
+			return
+		case <-timer.C:
+		}
 
 		logger.Info("retry monitoring started", "retry", i+1, "expires_at", expiry)
-		if s.monitorOnce(expiry) {
+		result = s.monitorOnce(ctx, expiry)
+		switch result {
+		case monitorCompleted:
 			logger.Info("retry monitoring succeeded; switching pump off", "retry", i+1)
-			if err := s.Pump.Switch(false); err != nil {
+			if err := s.Pump.SwitchContext(ctx, false); err != nil {
 				logger.Error("retry succeeded but pump could not be switched off", "retry", i+1, "error", err)
 			}
+			return
+		case monitorTankFull, monitorCanceled:
 			return
 		}
 
@@ -66,20 +91,41 @@ func (s *Scheduler) Start(expiry time.Time) {
 	logger.Error("all retries exhausted", "max_retries", s.Config.MaxRetries)
 }
 
-func (s *Scheduler) monitorOnce(expiry time.Time) bool {
+type monitorResult int
+
+const (
+	monitorFailed monitorResult = iota
+	monitorCompleted
+	monitorTankFull
+	monitorCanceled
+)
+
+func (s *Scheduler) monitorOnce(ctx context.Context, expiry time.Time) monitorResult {
 	logger := slog.With("component", "scheduler")
 	ticker := time.NewTicker(s.Config.MonitorInterval)
 	defer ticker.Stop()
 
 	lowCurrentCount := 0
-	for t := range ticker.C {
-		if t.After(expiry) {
-			logger.Info("monitor period ended", "expires_at", expiry)
-			return true
+	for {
+		var t time.Time
+		select {
+		case <-ctx.Done():
+			logger.Info("monitor canceled by shutdown")
+			return monitorCanceled
+		case t = <-ticker.C:
 		}
 
-		current, err := s.Pump.GetCurrent()
+		if t.After(expiry) {
+			logger.Info("monitor period ended", "expires_at", expiry)
+			return monitorCompleted
+		}
+
+		current, err := s.Pump.GetCurrentContext(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				logger.Info("pump current request canceled by shutdown")
+				return monitorCanceled
+			}
 			logger.Warn("could not read pump current", "device_id", s.Pump.DeviceID, "error", err)
 			continue
 		}
@@ -111,14 +157,18 @@ func (s *Scheduler) monitorOnce(expiry time.Time) bool {
 				"consecutive_checks", lowCurrentCount,
 				"required_minutes", s.Config.LowCurrentMinutes,
 			)
-			if err := s.Pump.Switch(false); err != nil {
+			if err := s.Pump.SwitchContext(ctx, false); err != nil {
 				logger.Error("failed to switch pump off after low-current shutdown", "error", err)
 			}
-			return false
+			return monitorFailed
 		}
 
-		tankCurrent, err := s.Tank.GetCurrent()
+		tankCurrent, err := s.Tank.GetCurrentContext(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				logger.Info("tank current request canceled by shutdown")
+				return monitorCanceled
+			}
 			logger.Warn("could not read tank current", "device_id", s.Tank.DeviceID, "error", err)
 			continue
 		}
@@ -129,12 +179,11 @@ func (s *Scheduler) monitorOnce(expiry time.Time) bool {
 				"tank_current_ma", tankCurrent,
 				"threshold_ma", s.Config.TankCurrentThreshold,
 			)
-			if err := s.Pump.Switch(false); err != nil {
+			if err := s.Pump.SwitchContext(ctx, false); err != nil {
 				logger.Error("failed to switch pump off after tank-full detection", "error", err)
 			}
 			logger.Info("terminating after tank-full detection")
-			os.Exit(0)
+			return monitorTankFull
 		}
 	}
-	return false
 }

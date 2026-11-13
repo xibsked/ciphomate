@@ -2,6 +2,7 @@ package device
 
 import (
 	"ciphomate/internal/tuya"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -22,8 +23,12 @@ func NewDevice(client *tuya.TuyaClient, deviceID string) *Device {
 }
 
 func (d *Device) FetchInchingTime() (int, error) {
+	return d.FetchInchingTimeContext(context.Background())
+}
+
+func (d *Device) FetchInchingTimeContext(ctx context.Context) (int, error) {
 	path := fmt.Sprintf("/v1.0/devices/%s/status", d.DeviceID)
-	resp, err := d.Client.SendRequest("GET", path, nil)
+	resp, err := d.Client.SendRequestContext(ctx, "GET", path, nil)
 	if err != nil {
 		return defaultInchingMinutes, fmt.Errorf("fetch status for device %q: %w", d.DeviceID, err)
 	}
@@ -79,9 +84,13 @@ func (d *Device) FetchInchingTime() (int, error) {
 }
 
 func (d *Device) GetCurrent() (int, error) {
+	return d.GetCurrentContext(context.Background())
+}
+
+func (d *Device) GetCurrentContext(ctx context.Context) (int, error) {
 	// return 0, nil
 	path := fmt.Sprintf("/v1.0/devices/%s/status", d.DeviceID)
-	resp, err := d.Client.SendRequest("GET", path, nil)
+	resp, err := d.Client.SendRequestContext(ctx, "GET", path, nil)
 	if err != nil {
 		return 0, fmt.Errorf("fetch status for device %q: %w", d.DeviceID, err)
 	}
@@ -107,6 +116,10 @@ func (d *Device) GetCurrent() (int, error) {
 }
 
 func (d *Device) Switch(on bool) error {
+	return d.SwitchContext(context.Background(), on)
+}
+
+func (d *Device) SwitchContext(ctx context.Context, on bool) error {
 	cmd := CommandRequest{
 		Commands: []Command{{
 			Code:  "switch_1",
@@ -118,7 +131,7 @@ func (d *Device) Switch(on bool) error {
 		return fmt.Errorf("encode switch command for device %q: %w", d.DeviceID, err)
 	}
 	path := fmt.Sprintf("/v1.0/devices/%s/commands", d.DeviceID)
-	_, err = d.Client.SendRequest("POST", path, payload)
+	_, err = d.Client.SendRequestContext(ctx, "POST", path, payload)
 	if err != nil {
 		slog.Error("device switch command failed",
 			"component", "device",
