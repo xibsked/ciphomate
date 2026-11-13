@@ -1,8 +1,6 @@
 services:
   ciphomate:
     build: .
-    environment:
-      START_TIME: ${START_TIME}
-      STOP_TIME: ${STOP_TIME}
-      TZ: ${TZ}
+    env_file:
+      - .env
     container_name: app

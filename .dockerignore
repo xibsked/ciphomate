@@ -6,3 +6,8 @@
 Dockerfile
 .dockerignore
 docker-compose.yml
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example

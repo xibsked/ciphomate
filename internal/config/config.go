@@ -2,7 +2,7 @@ package config
 
 import (
 	"flag"
-	"log"
+	"log/slog"
 	"os"
 	"strconv"
 	"time"
@@ -14,29 +14,32 @@ var envPath string
 
 func init() {
 	flag.StringVar(&envPath, "env", "", "Optional path to .env file")
-	flag.Parse()
+}
+
+func Load() (*Config, error) {
+	if !flag.Parsed() {
+		flag.Parse()
+	}
 	if envPath != "" {
 		err := godotenv.Load(envPath)
 		if err != nil {
-			log.Printf("⚠️ Could not load .env from '%s': %v", envPath, err)
+			slog.Warn("could not load environment file", "component", "config", "path", envPath, "error", err)
 		} else {
-			log.Printf("✅ Loaded .env from: %s", envPath)
+			slog.Info("loaded environment file", "component", "config", "path", envPath)
 		}
 	} else {
 		err := godotenv.Load()
 		if err != nil {
-			log.Println("No .env file found or unable to load it — relying on OS environment")
+			slog.Debug("no default .env file loaded; using process environment", "component", "config", "error", err)
 		} else {
-			log.Println("Loading .env from default location")
+			slog.Info("loaded environment file", "component", "config", "path", ".env")
 		}
 	}
-}
-
-func Load() (*Config, error) {
 	return &Config{
 		Host:                 os.Getenv("HOST"),
 		ClientID:             os.Getenv("CLIENT_ID"),
 		Secret:               os.Getenv("SECRET"),
+		LogLevel:             getEnv("LOG_LEVEL", "info"),
 		PumpDeviceID:         os.Getenv("PUMP_DEVICE_ID"),
 		TankDeviceID:         os.Getenv("TANK_DEVICE_ID"),
 		MaxRetries:           getEnvInt("MAX_RETRIES", 2),
@@ -48,10 +51,24 @@ func Load() (*Config, error) {
 	}, nil
 }
 
+func getEnv(key, defaultVal string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultVal
+}
+
 func getEnvInt(key string, defaultVal int) int {
 	if valStr := os.Getenv(key); valStr != "" {
 		if val, err := strconv.Atoi(valStr); err == nil {
 			return val
+		} else {
+			slog.Warn("invalid integer environment value; using default",
+				"component", "config",
+				"variable", key,
+				"default", defaultVal,
+				"error", err,
+			)
 		}
 	}
 	return defaultVal
@@ -61,6 +78,13 @@ func getEnvDuration(key string, defaultVal time.Duration) time.Duration {
 	if valStr := os.Getenv(key); valStr != "" {
 		if val, err := time.ParseDuration(valStr); err == nil {
 			return val
+		} else {
+			slog.Warn("invalid duration environment value; using default",
+				"component", "config",
+				"variable", key,
+				"default", defaultVal,
+				"error", err,
+			)
 		}
 	}
 	return defaultVal

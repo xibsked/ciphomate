@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -19,13 +19,17 @@ func NewTokenManager(cfg *config.Config, cachePath string) *TokenManager {
 	}
 }
 func (tm *TokenManager) GetToken() (string, error) {
-	// Try to load from cache
-	if err := tm.loadTokenFromCache(); err == nil && time.Now().Before(tm.ExpiresAt) {
-		log.Println("✅ Using cached Tuya token.")
-		return tm.Token, nil
+	if err := tm.loadTokenFromCache(); err == nil {
+		if time.Now().Before(tm.ExpiresAt) {
+			slog.Debug("using cached Tuya access token", "component", "tuya.auth", "expires_at", tm.ExpiresAt)
+			return tm.Token, nil
+		}
+		slog.Debug("cached Tuya access token expired", "component", "tuya.auth", "expires_at", tm.ExpiresAt)
+	} else {
+		slog.Debug("Tuya token cache unavailable; requesting a token", "component", "tuya.auth", "error", err)
 	}
 
-	log.Println("🔁 Fetching new Tuya token...")
+	slog.Info("requesting Tuya access token", "component", "tuya.auth")
 	resp, err := fetchToken(tm.Config)
 	if err != nil {
 		return "", err
@@ -33,9 +37,15 @@ func (tm *TokenManager) GetToken() (string, error) {
 
 	tm.Token = resp.AccessToken
 	tm.ExpiresAt = time.Now().Add(time.Duration(resp.ExpireTime) * time.Second)
+	slog.Info("Tuya access token acquired", "component", "tuya.auth", "expires_at", tm.ExpiresAt)
 
-	// Save to cache
-	_ = tm.saveTokenToCache()
+	if err := tm.saveTokenToCache(); err != nil {
+		slog.Warn("could not save Tuya token cache",
+			"component", "tuya.auth",
+			"cache_path", tm.CachePath,
+			"error", err,
+		)
+	}
 
 	return tm.Token, nil
 }
@@ -52,30 +62,55 @@ func fetchToken(config *config.Config) (TokenResponse, error) {
 	signStr := clientID + t + stringToSign
 	sign := strings.ToUpper(HmacSha256(signStr, secret))
 
-	req, _ := http.NewRequest("GET", host+path, nil)
+	req, err := http.NewRequest("GET", host+path, nil)
+	if err != nil {
+		return TokenResponse{}, fmt.Errorf("create Tuya token request: %w", err)
+	}
 	req.Header.Set("client_id", clientID)
 	req.Header.Set("sign", sign)
 	req.Header.Set("t", t)
 	req.Header.Set("sign_method", "HMAC-SHA256")
 
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: 10 * time.Second}
+	startedAt := time.Now()
+	resp, err := client.Do(req)
 	if err != nil {
-		return TokenResponse{}, err
+		slog.Warn("Tuya token request failed",
+			"component", "tuya.auth",
+			"duration", time.Since(startedAt),
+			"error", err,
+		)
+		return TokenResponse{}, fmt.Errorf("Tuya token request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	log.Println("Token API Response:", string(body))
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return TokenResponse{}, fmt.Errorf("read Tuya token response: %w", err)
+	}
+	slog.Debug("Tuya token request completed",
+		"component", "tuya.auth",
+		"http_status", resp.StatusCode,
+		"duration", time.Since(startedAt),
+	)
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return TokenResponse{}, fmt.Errorf("Tuya token endpoint returned HTTP %d", resp.StatusCode)
+	}
 
 	var result struct {
 		Result TokenResponse `json:"result"`
 	}
-	err = json.Unmarshal(body, &result)
-	return result.Result, err
+	if err := json.Unmarshal(body, &result); err != nil {
+		return TokenResponse{}, fmt.Errorf("decode Tuya token response: %w", err)
+	}
+	if result.Result.AccessToken == "" {
+		return TokenResponse{}, fmt.Errorf("Tuya token response did not contain an access token")
+	}
+	return result.Result, nil
 }
 
 func (tm *TokenManager) loadTokenFromCache() error {
-	data, err := ioutil.ReadFile(tm.CachePath)
+	data, err := os.ReadFile(tm.CachePath)
 	if err != nil {
 		return err
 	}
@@ -99,5 +134,8 @@ func (tm *TokenManager) saveTokenToCache() error {
 	if err != nil {
 		return err
 	}
-	return ioutil.WriteFile(tm.CachePath, data, 0644)
+	if err := os.WriteFile(tm.CachePath, data, 0600); err != nil {
+		return err
+	}
+	return os.Chmod(tm.CachePath, 0600)
 }

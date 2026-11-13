@@ -8,6 +8,7 @@ type Config struct {
 	Host                 string
 	ClientID             string
 	Secret               string
+	LogLevel             string
 	PumpDeviceID         string
 	TankDeviceID         string
 	MaxRetries           int

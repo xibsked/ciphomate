@@ -1,7 +1,7 @@
 package scheduler
 
 import (
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -24,89 +24,115 @@ func NewScheduler(config *config.Config, pump *device.Device, tank *device.Devic
 }
 
 func (s *Scheduler) Start(expiry time.Time) {
-	log.Printf("🕒 Starting monitor. Expiry at %v", expiry)
+	logger := slog.With("component", "scheduler")
+	logger.Info("monitor started", "expires_at", expiry)
 
 	success := s.monitorOnce(expiry)
 	if success {
-		log.Println("✅ Initial monitor passed. Turning off device.")
-		_ = s.Pump.Switch(false)
+		logger.Info("monitor period completed; switching pump off")
+		if err := s.Pump.Switch(false); err != nil {
+			logger.Error("failed to switch pump off after monitor completed", "error", err)
+		}
 		return
 	}
 
-	log.Println("🔁 Initial monitor failed. Starting retries...")
+	logger.Warn("initial monitoring failed; retries will start", "max_retries", s.Config.MaxRetries)
 
 	for i := 0; i < s.Config.MaxRetries; i++ {
-		log.Printf("🕒 Waiting %v before retry #%d", s.Config.RetryDelay, i+1)
+		logger.Info("waiting before retry", "retry", i+1, "retry_delay", s.Config.RetryDelay)
 		time.Sleep(s.Config.RetryDelay)
 
-		log.Printf("🔁 Retry #%d: Switching ON device", i+1)
+		logger.Info("retry switching pump on", "retry", i+1)
 		err := s.Pump.Switch(true)
 		if err != nil {
-			log.Printf("❌ Retry #%d switch ON failed: %v", i+1, err)
+			logger.Error("retry failed to switch pump on", "retry", i+1, "error", err)
 			continue
 		}
 
-		// Optional: wait a bit before reading current
 		time.Sleep(2 * time.Second)
 
-		log.Printf("🔍 Retry #%d monitoring started (for %v)...", i+1, expiry)
+		logger.Info("retry monitoring started", "retry", i+1, "expires_at", expiry)
 		if s.monitorOnce(expiry) {
-			log.Printf("✅ Retry #%d succeeded. Turning off device.", i+1)
-			_ = s.Pump.Switch(false)
+			logger.Info("retry monitoring succeeded; switching pump off", "retry", i+1)
+			if err := s.Pump.Switch(false); err != nil {
+				logger.Error("retry succeeded but pump could not be switched off", "retry", i+1, "error", err)
+			}
 			return
 		}
 
-		log.Printf("❌ Retry #%d failed. Continuing...", i+1)
+		logger.Warn("retry monitoring failed", "retry", i+1)
 	}
 
-	log.Println("🚫 All retries exhausted.")
+	logger.Error("all retries exhausted", "max_retries", s.Config.MaxRetries)
 }
 
 func (s *Scheduler) monitorOnce(expiry time.Time) bool {
+	logger := slog.With("component", "scheduler")
 	ticker := time.NewTicker(s.Config.MonitorInterval)
 	defer ticker.Stop()
 
 	lowCurrentCount := 0
 	for t := range ticker.C {
 		if t.After(expiry) {
-			log.Println("⏰ Monitor period ended naturally.")
+			logger.Info("monitor period ended", "expires_at", expiry)
 			return true
 		}
 
 		current, err := s.Pump.GetCurrent()
 		if err != nil {
-			log.Println("⚠️ Error reading current:", err)
+			logger.Warn("could not read pump current", "device_id", s.Pump.DeviceID, "error", err)
 			continue
 		}
 
-		log.Printf("🔌 Current draw: %d mA", current)
+		logger.Info("pump current measured",
+			"device_id", s.Pump.DeviceID,
+			"current_ma", current,
+			"threshold_ma", s.Config.PumpCurrentThreshold,
+		)
 
 		if current < s.Config.PumpCurrentThreshold {
 			lowCurrentCount++
-			log.Printf("⚠️ Low current (%d checks)", lowCurrentCount)
+			logger.Warn("pump current below threshold",
+				"device_id", s.Pump.DeviceID,
+				"current_ma", current,
+				"threshold_ma", s.Config.PumpCurrentThreshold,
+				"consecutive_checks", lowCurrentCount,
+				"required_minutes", s.Config.LowCurrentMinutes,
+			)
 		} else {
+			if lowCurrentCount > 0 {
+				logger.Info("pump current recovered", "previous_low_current_checks", lowCurrentCount)
+			}
 			lowCurrentCount = 0
 		}
 
 		if time.Duration(lowCurrentCount)*s.Config.MonitorInterval >= time.Duration(s.Config.LowCurrentMinutes)*time.Minute {
-			log.Println("❌ Early shutdown due to sustained low current.")
-			s.Pump.Switch(false)
+			logger.Error("early shutdown due to sustained low current",
+				"consecutive_checks", lowCurrentCount,
+				"required_minutes", s.Config.LowCurrentMinutes,
+			)
+			if err := s.Pump.Switch(false); err != nil {
+				logger.Error("failed to switch pump off after low-current shutdown", "error", err)
+			}
 			return false
 		}
 
 		tankCurrent, err := s.Tank.GetCurrent()
 		if err != nil {
-			log.Printf("Cannot get current of tank: %+v", err)
+			logger.Warn("could not read tank current", "device_id", s.Tank.DeviceID, "error", err)
+			continue
 		}
 
 		if tankCurrent >= s.Config.TankCurrentThreshold {
-			log.Printf("Tank level detection current is %d", tankCurrent)
-			log.Printf("Tank level detection current threshold is %d", s.Config.TankCurrentThreshold)
-			log.Printf("Tank is full, switching the pump off.")
-
-			s.Pump.Switch(false)
-
-			log.Printf("Terminating the ciphomate")
+			logger.Info("tank is full; switching pump off",
+				"device_id", s.Tank.DeviceID,
+				"tank_current_ma", tankCurrent,
+				"threshold_ma", s.Config.TankCurrentThreshold,
+			)
+			if err := s.Pump.Switch(false); err != nil {
+				logger.Error("failed to switch pump off after tank-full detection", "error", err)
+			}
+			logger.Info("terminating after tank-full detection")
 			os.Exit(0)
 		}
 	}

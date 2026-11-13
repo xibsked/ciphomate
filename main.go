@@ -3,9 +3,11 @@ package main
 import (
 	"ciphomate/internal/config"
 	"ciphomate/internal/device"
+	"ciphomate/internal/logging"
 	"ciphomate/internal/scheduler"
 	"ciphomate/internal/tuya"
-	"log"
+	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,11 +17,34 @@ import (
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("❌ Failed to load config: %v", err)
+		slog.Error("failed to load configuration", "component", "app", "error", err)
+		os.Exit(1)
 	}
 
-	log.Printf("✅ Loaded config: %+v", cfg)
+	logger, err := logging.NewTextLogger(os.Stderr, cfg.LogLevel)
+	if err != nil {
+		slog.Error("failed to configure logging", "component", "app", "error", err)
+		os.Exit(2)
+	}
+	slog.SetDefault(logger)
 
+	if err := run(cfg); err != nil {
+		slog.Error("application stopped with an error", "component", "app", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run(cfg *config.Config) error {
+	logger := slog.With("component", "app")
+	logger.Info("application started",
+		"pump_device_id", cfg.PumpDeviceID,
+		"tank_device_id", cfg.TankDeviceID,
+		"pump_current_threshold_ma", cfg.PumpCurrentThreshold,
+		"tank_current_threshold_ma", cfg.TankCurrentThreshold,
+		"monitor_interval", cfg.MonitorInterval,
+		"max_retries", cfg.MaxRetries,
+		"retry_delay", cfg.RetryDelay,
+	)
 	tm := tuya.NewTokenManager(cfg, "token_cache.json")
 	client := tuya.NewTuyaClient(cfg, tm)
 	pump := device.NewDevice(client, cfg.PumpDeviceID)
@@ -27,48 +52,58 @@ func main() {
 
 	tankCurrent, err := tank.GetCurrent()
 	if err != nil {
-		log.Printf("Cannot get current of tank: %+v", err)
+		logger.Warn("could not read tank current; continuing startup",
+			"component", "device",
+			"device_id", cfg.TankDeviceID,
+			"error", err,
+		)
 	}
 
 	if tankCurrent >= cfg.TankCurrentThreshold {
-		log.Printf("Tank is full so no need to anything.")
-		os.Exit(0)
+		logger.Info("tank is full; pump will not start",
+			"tank_current_ma", tankCurrent,
+			"threshold_ma", cfg.TankCurrentThreshold,
+		)
+		return nil
 	}
 
 	inchingMinutes, err := pump.FetchInchingTime()
 	if err != nil {
-		log.Fatalf("Error fetching inching time: %v", err)
+		return fmt.Errorf("fetch pump inching time: %w", err)
 	}
 
 	expiry := time.Now().Add(time.Duration(inchingMinutes) * time.Minute)
 
-	log.Println("Triggering initial power ON and monitoring...")
+	logger.Info("starting pump monitoring",
+		"inching_minutes", inchingMinutes,
+		"monitor_expires_at", expiry,
+	)
 
 	err = pump.Switch(true)
 	if err != nil {
-		log.Fatalf("Failed to switch ON device: %v", err)
+		return fmt.Errorf("switch pump on: %w", err)
 	}
-	scheduler := scheduler.NewScheduler(cfg, pump, tank)
+	monitor := scheduler.NewScheduler(cfg, pump, tank)
 
-	go scheduler.Start(expiry)
+	go monitor.Start(expiry)
 
-	// Signal handling
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
 
-	log.Println("Program is running. Waiting for signal to exit...")
+	logger.Info("waiting for shutdown signal")
 
-	<-sigChan // Block here until a signal is received
+	sig := <-sigChan
 
-	log.Println("Signal received. Turning off device and exiting...")
+	logger.Info("shutdown signal received", "signal", sig.String())
 
-	// ✅ Graceful shutdown
 	err = pump.Switch(false)
 	if err != nil {
-		log.Printf("Error switching off device: %v", err)
+		return fmt.Errorf("switch pump off during shutdown: %w", err)
 	} else {
-		log.Println("Device turned OFF successfully.")
+		logger.Info("pump switched off during shutdown")
 	}
 
-	log.Println("Shutdown complete.")
+	logger.Info("shutdown complete")
+	return nil
 }
